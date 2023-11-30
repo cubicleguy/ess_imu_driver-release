@@ -1,0 +1,14 @@
+ros-noetic-ess-imu-driver (1.0.1-3focal) focal; urgency=high
+
+
+
+ -- Raymond Chow <raymond.chow@ea.epson.com>  Thu, 30 Nov 2023 08:00:00 -0000
+
+ros-noetic-ess-imu-driver (1.0.0-3focal) focal; urgency=high
+
+  * support UART or SPI in same package
+  * add publisher for temperature sensor data
+
+ -- Raymond Chow <raymond.chow@ea.epson.com>  Wed, 29 Nov 2023 08:00:00 -0000
+
+
