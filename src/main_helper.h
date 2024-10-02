@@ -22,8 +22,9 @@ extern "C" {
 #endif
 
 // Prototypes
-void printHeaderRow(FILE *fp, struct EpsonOptions);
-void printSensorRow(FILE *fp, struct EpsonOptions, struct EpsonData *, int);
+void printHeaderRow(FILE* fp, const struct EpsonOptions*);
+void printSensorRow(FILE* fp, const struct EpsonOptions*,
+                    const struct EpsonData*, int);
 
 #ifdef __cplusplus
 }

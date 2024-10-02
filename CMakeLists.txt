@@ -22,6 +22,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## LIBRARIES: libraries you create in this project that dependent projects also need
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
+
 catkin_package(
   CATKIN_DEPENDS
   roscpp
@@ -41,7 +42,6 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
-
 # Specify compiler options
 set(CMAKE_CXX_COMPILER "/usr/bin/g++")
 
@@ -54,45 +54,22 @@ else ()
     set (CMAKE_C_STANDARD 99)
 endif ()
 
-# Specify DEBUG macro to enable any debug code by adding "-DDEBUG" in add_definitions()
-#add_definitions(-DDEBUG)
+#######################################################
+# The user only needs to select the PLATFORM and
+# INTERFACE macro variables
+#
+# 1. Select PLATFORM type (NONE (PC) or RPI (RaspberryPi))
+# 2. Select Serial INTERFACE type to UART or SPI
+#
+# NOTE: PLATFORM type must be set to RaspberryPi to support SPI interface
 
-# Specify ACCL_RANGE_16G macro to enable 16G accelerometer range, otherwise defaults to 8G
-# Only supported for G330PDG0/G366PDG0/G370PDG0/G370PDT0
-# Uncomment below to enable 16G output range
-#add_definitions(-DACCL_RANGE_16G)
-
-# Refer to the README_src.md inside the src folder for more details
-# Uncomment the desired imu_model to build
-
-# Current
-#set(IMU_MODEL "G330PDG0")
-#set(IMU_MODEL "G365PDC1")
-#set(IMU_MODEL "G365PDF1")
-set(IMU_MODEL "G366PDG0")
-#set(IMU_MODEL "G370PDF1")
-#set(IMU_MODEL "G370PDS0")
-#set(IMU_MODEL "G370PDG0")
-#set(IMU_MODEL "G370PDT0")
-
-# legacy
-#set(IMU_MODEL "G320PDG0")
-#set(IMU_MODEL "G354PDH0")
-#set(IMU_MODEL "G364PDCA")
-#set(IMU_MODEL "G364PDC0")
-#set(IMU_MODEL "V340PDD0")
-
-# Select Platform type (NONE or RPI (RaspberryPi))
-# NOTE: Platform type must be set to RaspberryPi to support SPI interface with this software
 set(PLATFORM "NONE")
 #set(PLATFORM "RPI")
 
-# Select Serial Interface type to UART or SPI
-# NOTE: SPI interface is only supported by RaspberryPi with this software
 set(INTERFACE "UART")
 #set(INTERFACE "SPI")
+#######################################################
 
-message("-- Building for IMU Model: ${IMU_MODEL}")
 message("---- Building for platform: ${PLATFORM}")
 message("---- Building for interface: ${INTERFACE}")
 
@@ -103,15 +80,8 @@ if (INTERFACE STREQUAL "SPI")
 endif()
 
 # Define macros variables for compilation
-add_definitions(-D${IMU_MODEL})
-add_definitions(-DBUILD_FOR=\"${IMU_MODEL}\")
 add_definitions(-D${INTERFACE})
 add_definitions(-D${PLATFORM})
-
-# Setting macro NATIVE_QUAT enables hardware quaternion output function for G365/G330/G366
-# and has no effect for any other IMU models
-# NOTE: DONOT delete this macro
-add_definitions(-DNATIVE_QUAT)
 
 # Create file list for C libraries based on platform
 if (PLATFORM STREQUAL "RPI")
@@ -146,49 +116,6 @@ else()
   message([FATAL_ERROR] "**** Invalid Interface")
 endif()
 
-# Add IMU model specific source to library
-if (IMU_MODEL STREQUAL "G320PDG0")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG320.c)
-elseif (IMU_MODEL STREQUAL "G354PDH0")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG354.c)
-elseif (IMU_MODEL STREQUAL "G364PDCA")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG364.c)
-elseif (IMU_MODEL STREQUAL "G364PDC0")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG364.c)
-elseif (IMU_MODEL STREQUAL "G365PDC1")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG365.c)
-elseif (IMU_MODEL STREQUAL "G365PDF1")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG365.c)
-elseif (IMU_MODEL STREQUAL "G370PDF1")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG370.c)
-elseif (IMU_MODEL STREQUAL "G370PDS0")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG370.c)
-elseif (IMU_MODEL STREQUAL "G330PDG0")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG330_G366.c)
-elseif (IMU_MODEL STREQUAL "G366PDG0")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG330_G366.c)
-elseif (IMU_MODEL STREQUAL "G370PDG0")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG370.c)
-elseif (IMU_MODEL STREQUAL "G370PDT0")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonG370.c)
-elseif (IMU_MODEL STREQUAL "V340PDD0")
-  set(lib_sources ${lib_sources}
-    src/sensor_epsonV340.c)
-else()
-  message([FATAL_ERROR] "**** Invalid IMU Model")
-endif()
 
 # Declare a library for Epson IMU functions from C sources
 add_library(ess_imu_driver_lib

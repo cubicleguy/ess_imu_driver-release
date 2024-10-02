@@ -5,13 +5,12 @@
 //     - This program initializes the Epson IMU and publishes ROS messages in
 //       ROS topic /epson_imu as convention per [REP 145]
 //       (http://www.ros.org/reps/rep-0145.html).
-//     - If the IMU model supports quaternion output (currently supported only
-//     by
-//       G330/G365/G366) orientation fields are updated in published topic
-//       /epson_imu/data
-//     - If the IMU model does not support quaternion output, then
-//       orientation fields do not update in published
-//       topic /epson_imu/data_raw
+//     - If the IMU model supports quaternion output
+//       then sensor messages are published topic /epson_imu/data with
+//       angular_velocity, linear_acceleration, orientation fields updating
+//     - If the IMU model does not support quaternion output
+//       then sensor messages are published topic /epson_imu/data with only
+//       angular_velocity, and linear_acceleration fields updating
 //
 //  [This software is BSD-3
 //  licensed.](http://opensource.org/licenses/BSD-3-Clause)
@@ -20,7 +19,7 @@
 //  Copyright (c) 2019, Carnegie Mellon University. All rights reserved.
 //
 //  Additional Code contributed:
-//  Copyright (c) 2019, 2023, Seiko Epson Corp. All rights reserved.
+//  Copyright (c) 2019, 2024, Seiko Epson Corp. All rights reserved.
 //
 //  Redistribution and use in source and binary forms, with or without
 //  modification, are permitted provided that the following conditions are met:
@@ -64,6 +63,7 @@
 #include "hcl.h"
 #include "hcl_gpio.h"
 #include "hcl_uart.h"
+#include "sensor_epsonUart.h"
 #include "sensor_epsonCommon.h"
 
 using namespace std;
@@ -74,13 +74,18 @@ string serial_port;
 //------------------------ IMU Initialization -----------------------------
 //=========================================================================
 
-bool init_imu(const struct EpsonOptions& options) {
+bool init_imu(struct EpsonProperties* ptr_epson_sensor,
+              struct EpsonOptions* ptr_epson_options) {
+  char prod_id_[9];  // String to store Device Product ID
+  char ser_id_[9];   // String to store Device Serial ID
+
   ROS_INFO("Initializing HCL layer...");
   if (!seInit()) {
     ROS_ERROR(
-        "Error: could not initialize the Seiko Epson HCL layer. Exiting...");
+      "Error: could not initialize the Seiko Epson HCL layer. Exiting...");
     return false;
   }
+  std::cout << "...done." << std::endl;
 
   ROS_INFO("Initializing GPIO interface...");
   if (!gpioInit()) {
@@ -88,6 +93,7 @@ bool init_imu(const struct EpsonOptions& options) {
     seRelease();
     return false;
   }
+  std::cout << "...done." << std::endl;
 
   ROS_INFO("Initializing UART interface...");
   // The baudrate value should be set the the same setting as currently
@@ -98,13 +104,14 @@ bool init_imu(const struct EpsonOptions& options) {
     seRelease();
     return false;
   }
+  std::cout << "...done." << std::endl;
 
-  // This is required for NVIDIA Jetson TK1 but root cause is still TBD.
-  // Current assumption is that when the serial port is first opened, there are
-  // corrupted characters sent on first serial messages.
-  // So sending dummy command may work around this condition
-  // Investigation TBD
+  // This is a workaround for NVIDIA Jetson TK1.
+  // When the serial port is first opened, some random
+  // characters are sent on first serial messages. This
+  // attempts to workaround this issue.
   sensorDummyWrite();
+  std::cout << "...done." << std::endl;
 
   ROS_INFO("Checking sensor NOT_READY status...");
   if (!sensorPowerOn()) {
@@ -114,153 +121,126 @@ bool init_imu(const struct EpsonOptions& options) {
     seRelease();
     return false;
   }
-  printf("...done.");
+  std::cout << "...done." << std::endl;
+
+  ROS_INFO("Detecting sensor model...");
+  if (!sensorGetDeviceModel(ptr_epson_sensor, prod_id_, ser_id_)) {
+    ROS_ERROR("Error: failed to detect sensor model. Exiting...");
+    return false;
+  }
+  std::cout << "...done." << std::endl;
 
   ROS_INFO("Initializing Sensor...");
-  if (!sensorInitOptions(options)) {
+  if (!sensorInitOptions(ptr_epson_sensor, ptr_epson_options)) {
     ROS_ERROR("Error: could not initialize Epson Sensor. Exiting...");
     uartRelease();
     gpioRelease();
     seRelease();
     return false;
   }
+  std::cout << "...done." << std::endl;
 
-  ROS_INFO("Epson IMU initialized.");
+  ROS_INFO("Epson IMU initialized.\n");
   return true;
 }
 
 //=========================================================================
-//------------------------ IMU Identify PROD_ID & SER_NUM -----------------
-//=========================================================================
-
-std::string get_prod_id() {
-  unsigned short prod_id1 = registerRead16(CMD_WINDOW1, ADDR_PROD_ID1, false);
-  unsigned short prod_id2 = registerRead16(CMD_WINDOW1, ADDR_PROD_ID2, false);
-  unsigned short prod_id3 = registerRead16(CMD_WINDOW1, ADDR_PROD_ID3, false);
-  unsigned short prod_id4 = registerRead16(CMD_WINDOW1, ADDR_PROD_ID4, false);
-
-  char myarray[] = {
-      static_cast<char>(prod_id1), static_cast<char>(prod_id1 >> 8),
-      static_cast<char>(prod_id2), static_cast<char>(prod_id2 >> 8),
-      static_cast<char>(prod_id3), static_cast<char>(prod_id3 >> 8),
-      static_cast<char>(prod_id4), static_cast<char>(prod_id4 >> 8)};
-  std::string prod_id(myarray);
-  return prod_id;
-}
-
-std::string get_serial_id() {
-  unsigned short ser_num1 =
-      registerRead16(CMD_WINDOW1, ADDR_SERIAL_NUM1, false);
-  unsigned short ser_num2 =
-      registerRead16(CMD_WINDOW1, ADDR_SERIAL_NUM2, false);
-  unsigned short ser_num3 =
-      registerRead16(CMD_WINDOW1, ADDR_SERIAL_NUM3, false);
-  unsigned short ser_num4 =
-      registerRead16(CMD_WINDOW1, ADDR_SERIAL_NUM4, false);
-
-  char myarray[] = {
-      static_cast<char>(ser_num1), static_cast<char>(ser_num1 >> 8),
-      static_cast<char>(ser_num2), static_cast<char>(ser_num2 >> 8),
-      static_cast<char>(ser_num3), static_cast<char>(ser_num3 >> 8),
-      static_cast<char>(ser_num4), static_cast<char>(ser_num4 >> 8)};
-  std::string ser_num(myarray);
-  return ser_num;
-}
-
-void identify_build() { ROS_INFO_STREAM("Compiled for:\t" << BUILD_FOR); }
-
-void identify_device() {
-  ROS_INFO("Reading device info...");
-  ROS_INFO("PRODUCT ID:\t%s", get_prod_id().c_str());
-  ROS_INFO("SERIAL ID:\t%s", get_serial_id().c_str());
-}
-
-//=========================================================================
-//----------------------- Timestamp Correction ----------------------------
+// Timestamp Correction
+//
+// Time correction makes use of the Epson IMU External Reset Counter function.
+// This assumes that the ROS time is accurately sync'ed to GNSS (approx.
+// within 100s of microsecs) and the GNSS 1PPS signal is sent to
+// Epson IMU's GPIO2_EXT pin. The system latency for calling
+// rclcpp::Clock().now() is assumed to be negligible. Otherwise the timestamp
+// correction may not be reliable. The get_stamp() method attempts to return
+// a timestamp based on the IMU reset count value to exclude time delays
+// caused by latencies in the link between the host system and the IMU.
 //=========================================================================
 
 class TimeCorrection {
  private:
-  int32_t MAX_COUNT;
-  int32_t ALMOST_ROLLOVER;
-  int32_t ONE_SEC_NSEC;
-  int32_t HALF_SEC_NSEC;
-
-  int32_t count_corrected;
-  int32_t count_corrected_old;
-  int32_t count_old;
-  int32_t count_diff;
+  const int64_t ONE_SEC_NSEC = 1000000000;
+  const int64_t HALF_SEC_NSEC = 500000000;
+  int64_t max_count;
+  int64_t almost_rollover;
+  int64_t count_corrected;
+  int64_t count_corrected_old;
+  int64_t count_old;
+  int64_t count_diff;
   int32_t time_sec_current;
   int32_t time_sec_old;
-  int32_t time_nsec_current;
+  int64_t time_nsec_current;
   bool rollover;
   bool flag_imu_lead;
+  bool is_gen2_imu;
 
  public:
   TimeCorrection();
+  void set_imu(int);
   ros::Time get_stamp(int);
 };
 
+// Constructor
 TimeCorrection::TimeCorrection() {
-  // ALMOST_ROLLOVER value depends on system processing speed & overhead latency
-  // When accurate 1PPS signal is connected to GPIO2/EXT, counter reset should
-  // never go over ALMOST_ROLLOVER
-#if defined G320PDG0 || defined G354PDH0 || defined G364PDC0 || \
-    defined G364PDCA || defined V340PDD0
-  // Counter freq = 46875Hz, Max Count = 65535/46875 * 1e9
-  MAX_COUNT = 1398080000;
-  ALMOST_ROLLOVER = 1340000000;
-#else
-  // Counter freq = 62500Hz, Max Count = 65535/62500 * 1e9
-  MAX_COUNT = 1048560000;
-  ALMOST_ROLLOVER = 1010000000;
-#endif
-  ONE_SEC_NSEC = 1000000000;
-  HALF_SEC_NSEC = 500000000;
-
+  max_count = 1048560000;
+  almost_rollover = max_count * 0.95;
   count_corrected = 0;
-  count_corrected_old = 0;
   count_old = 0;
   count_diff = 0;
   time_sec_current = 0;
   time_sec_old = 0;
   time_nsec_current = 0;
+  count_corrected_old = 0;
   rollover = false;
   flag_imu_lead = false;
+  is_gen2_imu = false;
+}
+
+//=========================================================================
+// TimeCorrection::set_imu
+//
+// Sets the count thresholds based on external counter reset frequencies
+// which may vary depending on the Epson IMU model.
+//=========================================================================
+
+void TimeCorrection::set_imu(int epson_model) {
+  // max_count depends on IMU model's reset counter freq
+  // For Gen2 IMUs freq = 46875Hz, max_count = 65535/46875 * 1e9
+  // For Gen3 IMUs freq = 62500Hz, max_count = 65535/62500 * 1e9
+  is_gen2_imu = ((epson_model == G320PDG0) || (epson_model == G320PDGN) ||
+                 (epson_model == G354PDH0) || (epson_model == G364PDCA) ||
+                 (epson_model == G364PDC0));
+
+  max_count = (is_gen2_imu) ? 1398080000 : 1048560000;
 }
 
 //=========================================================================
 // TimeCorrection::get_stamp
 //
 // Returns the timestamp based on time offset from most recent 1PPS signal.
-// Epson IMU has a free-running upcounter that resets on active 1PPS signal.
+// Epson IMU has a free-running up-counter that resets on active 1PPS signal.
 // Counter value is embedded in the sensor data at the time of sampling.
 // Time stamp is corrected based on reset counter retrieved from embedded
 // sensor data.
-//
-// This assumes that the ROS time is sync'ed to 1PPS pulse sent to
-// Epson IMU GPIO2_EXT pin and the IMU Counter Reset feature is enabled
-// and the ROS latency from IMU sample to calling ros::Time::now() is
-// less than 0.020 seconds, otherwise the timestamp returned may be
-// unreliable.
-// The IMU count is already converted to nsecs units (should always be
-// less than ONE_SEC_NSEC (1e9)
 //=========================================================================
 ros::Time TimeCorrection::get_stamp(int count) {
   time_sec_current = ros::Time::now().toSec();
   time_nsec_current = ros::Time::now().nsec;
-  std::cout.precision(20);
+
+  // almost_rollover is arbitrarily set at ~95% of max_count
+  almost_rollover = max_count * 0.95;
 
   count_diff = count - count_old;
-  if (count > ALMOST_ROLLOVER) {
+  if (count > almost_rollover) {
     rollover = true;
   }
   if (count_diff < 0) {
     if (rollover) {
-      count_diff = count + (MAX_COUNT - count_old);
+      count_diff = count + (max_count - count_old);
       ROS_WARN(
-          "Warning: time_correction enabled but IMU external counter reset "
-          "rollover detected. Is 1PPS connected to IMU GPIO2/EXT pin?");
+        "Warning: time_correction enabled but IMU reset counter "
+        "rollover detected. If 1PPS not connected to IMU GPIO2/EXT "
+        "pin, disable time_correction.");
     } else {
       count_diff = count;
       count_corrected = 0;
@@ -294,84 +274,82 @@ ros::Time TimeCorrection::get_stamp(int count) {
 //=========================================================================
 
 int main(int argc, char** argv) {
-  ros::init(argc, argv, "epson_imu_uart_driver_node");
+  ros::init(argc, argv, "ess_imu_driver_node");
+
+  // Force flush of the stdout buffer, which ensures a sync of all console
+  // output even from a launch file.
+  setvbuf(stdout, nullptr, _IONBF, BUFSIZ);
+
   ros::NodeHandle nh;
   ros::NodeHandle np("~");
 
-  np.param<string>("port", serial_port, "/dev/ttyUSB0");
+  std::string frame_id = "imu_link";
+  std::string imu_topic = "epson_imu";
+  std::string temperature_topic = "epson_tempc";
 
-  struct EpsonOptions options;
-  int time_correction = false;
+  np.param<string>("serial_port", serial_port, "/dev/ttyUSB0");
 
-  // Recommended to change these parameters via .launch file instead of
-  // modifying source code below directly
-  np.param("ext_sel", options.ext_sel, 1);
-  np.param("ext_pol", options.ext_pol, 0);
-  np.param("drdy_on", options.drdy_on, 0);
-  np.param("drdy_pol", options.drdy_pol, 1);
+  // IMU properties
+  struct EpsonProperties epson_sensor;
 
-  np.param("dout_rate", options.dout_rate, 3);
-  np.param("filter_sel", options.filter_sel, 5);
+  // IMU configuration settings
+  struct EpsonOptions epson_options = {};
 
-  np.param("flag_out", options.flag_out, 1);
-  np.param("temp_out", options.temp_out, 1);
-  np.param("gyro_out", options.gyro_out, 1);
-  np.param("accel_out", options.accel_out, 1);
-  np.param("gyro_delta_out", options.gyro_delta_out, 0);
-  np.param("accel_delta_out", options.accel_delta_out, 0);
-  np.param("qtn_out", options.qtn_out, 0);
-  np.param("atti_out", options.atti_out, 0);
-  np.param("gpio_out", options.gpio_out, 0);
-  np.param("count_out", options.count_out, 1);
-  np.param("checksum_out", options.checksum_out, 1);
+  // Buffer for scaled values of IMU read burst
+  struct EpsonData epson_data = {};
 
-  np.param("temp_bit", options.temp_bit, 1);
-  np.param("gyro_bit", options.gyro_bit, 1);
-  np.param("accel_bit", options.accel_bit, 1);
-  np.param("gyro_delta_bit", options.gyro_delta_bit, 1);
-  np.param("accel_delta_bit", options.accel_delta_bit, 1);
-  np.param("qtn_bit", options.qtn_bit, 1);
-  np.param("atti_bit", options.atti_bit, 1);
-
-  np.param("invert_xgyro", options.invert_xgyro, 0);
-  np.param("invert_ygyro", options.invert_ygyro, 0);
-  np.param("invert_zgyro", options.invert_zgyro, 0);
-  np.param("invert_xaccel", options.invert_xaccel, 0);
-  np.param("invert_yaccel", options.invert_yaccel, 0);
-  np.param("invert_zaccel", options.invert_zaccel, 0);
-
-  np.param("dlt_ovf_en", options.dlt_ovf_en, 0);
-  np.param("dlt_range_ctrl", options.dlt_range_ctrl, 8);
-
-  np.param("atti_mode", options.atti_mode, 1);
-  np.param("atti_conv", options.atti_conv, 0);
-  np.param("atti_profile", options.atti_profile, 0);
-
-  np.param("time_correction", time_correction, 0);
-
-  if (!init_imu(options)) return -1;
-  identify_build();
-  identify_device();
-
-  int result = get_prod_id().compare(BUILD_FOR);
-  if (result == 0) {
-    ROS_INFO("OK: Build matches detected device");
-  } else {
-    ROS_ERROR("*** Build *mismatch* with detected device ***");
-    ROS_WARN(
-        "*** Check the CMakeLists.txt for setting a compatible IMU_MODEL \
-                  variable, modify as necessary, and rebuild the driver ***");
-  }
-  sensorStart();
-
-  struct EpsonData epson_data;
+  // Time correction object
   TimeCorrection tc;
 
   sensor_msgs::Temperature tempc_msg;
-  ros::Publisher tempc_pub =
-      nh.advertise<sensor_msgs::Temperature>("epson_tempc", 1);
-
   sensor_msgs::Imu imu_msg;
+
+  int time_correction = false;
+
+  // Recommend changing these parameters by .launch file instead of
+  // modifying source code below directly
+  np.param("ext_sel", epson_options.ext_sel, 1);  // external reset counter
+  np.param("ext_pol", epson_options.ext_pol, 0);
+  np.param("drdy_on", epson_options.drdy_on, 1);
+  np.param("drdy_pol", epson_options.drdy_pol, 1);
+
+  np.param("dout_rate", epson_options.dout_rate, CMD_RATE250);
+  np.param("filter_sel", epson_options.filter_sel, CMD_FLTAP32);
+
+  np.param("flag_out", epson_options.flag_out, 1);
+  np.param("temp_out", epson_options.temp_out, 1);
+  np.param("gyro_out", epson_options.gyro_out, 1);
+  np.param("accel_out", epson_options.accel_out, 1);
+  np.param("qtn_out", epson_options.qtn_out, 1);
+  np.param("count_out", epson_options.count_out, 1);
+  np.param("checksum_out", epson_options.checksum_out, 1);
+
+  np.param("temp_bit", epson_options.temp_bit, 1);
+  np.param("gyro_bit", epson_options.gyro_bit, 1);
+  np.param("accel_bit", epson_options.accel_bit, 1);
+  np.param("qtn_bit", epson_options.qtn_bit, 1);
+
+  np.param("atti_mode", epson_options.atti_mode, 1);
+  np.param("atti_profile", epson_options.atti_profile, 0);
+
+  np.param("time_correction", time_correction, 0);
+
+  if (!init_imu(&epson_sensor, &epson_options)) return -1;
+
+  // if quaternion output is enabled set topic to /epson_imu/data
+  // Otherwise set topic to /epson_imu/data_raw
+  imu_topic = (static_cast<bool>(epson_options.qtn_out) == false)
+                ? "/epson_imu/data_raw"
+                : "/epson_imu/data";
+
+  // Initialize time correction thresholds if enabled
+  if (time_correction) {
+    tc.set_imu(epson_sensor.model);
+  }
+
+  ros::Publisher tempc_pub =
+    nh.advertise<sensor_msgs::Temperature>(temperature_topic, 1);
+
   for (int i = 0; i < 9; i++) {
     imu_msg.orientation_covariance[i] = 0;
     imu_msg.angular_velocity_covariance[i] = 0;
@@ -379,22 +357,14 @@ int main(int argc, char** argv) {
   }
   imu_msg.orientation_covariance[0] = -1;
 
-  ros::Publisher imu_pub = nh.advertise<sensor_msgs::Imu>("epson_imu", 1);
-#ifdef PUB_RPY
-  ROS_INFO("Euler Output: SW Conversion from Quaternion.");
-  ros::Publisher rpy_pub =
-      nh.advertise<geometry_msgs::Vector3Stamped>("epson_imu_rpy", 1);
-#endif  // PUB_RPY
-  tf2::Quaternion myQuaternion, ang1Quaternion, ang2Quaternion, ang3Quaternion;
+  ros::Publisher imu_pub = nh.advertise<sensor_msgs::Imu>(imu_topic, 1);
 
-#ifdef NATIVE_QUAT
-  ROS_INFO("Quaternion Output: Native.");
-#else
-  ROS_INFO("Quaternion Output: SW Conversion from Euler.");
-#endif  // NATIVE_QUAT
+  sensorStart();
+
   while (ros::ok()) {
-    if (sensorDataReadBurstNOptions(options, &epson_data)) {
-      imu_msg.header.frame_id = "imu_link";
+    if (sensorDataReadBurstNOptions(&epson_sensor, &epson_options,
+                                    &epson_data)) {
+      imu_msg.header.frame_id = frame_id;
       if (!time_correction)
         imu_msg.header.stamp = ros::Time::now();
       else
@@ -405,63 +375,23 @@ int main(int argc, char** argv) {
       imu_msg.linear_acceleration.x = epson_data.accel_x;
       imu_msg.linear_acceleration.y = epson_data.accel_y;
       imu_msg.linear_acceleration.z = epson_data.accel_z;
-#ifdef NATIVE_QUAT
-      myQuaternion[0] = epson_data.qtn1;
-      myQuaternion[1] = epson_data.qtn2;
-      myQuaternion[2] = epson_data.qtn3;
-      myQuaternion[3] = epson_data.qtn0;
-#else
-      // Initialize quaternion
-      myQuaternion.setRPY(0, 0, 0);
-      // G365 euler output rotation order is yaw -> roll -> pitch about the
-      // rotating frame
-      // Create 3 independant quaternion rotations
-      // from G365 ANG1(roll), ANG2(pitch), ANG3(yaw)
-      ang1Quaternion.setRPY(epson_data.roll, 0, 0);
-      ang2Quaternion.setRPY(0, epson_data.pitch, 0);
-      ang3Quaternion.setRPY(0, 0, epson_data.yaw);
 
-      // Apply 3 quaternion rotations according G365 euler rotation order
-      // (yaw->roll->pitch)
-      // about the rotating axis (i.e. post-multiplication of rotation
-      // quaternion)
-      // and normalize after each
-      myQuaternion = myQuaternion * ang3Quaternion;  // yaw
-      myQuaternion.normalize();
-      myQuaternion = myQuaternion * ang1Quaternion;  // roll
-      myQuaternion.normalize();
-      myQuaternion = myQuaternion * ang2Quaternion;  // pitch
-      myQuaternion.normalize();
-#endif  // NATIVE_QUAT
       // Publish quaternion orientation
-      imu_msg.orientation.x = myQuaternion[0];
-      imu_msg.orientation.y = myQuaternion[1];
-      imu_msg.orientation.z = myQuaternion[2];
-      imu_msg.orientation.w = myQuaternion[3];
+      imu_msg.orientation.x = epson_data.qtn1;
+      imu_msg.orientation.y = epson_data.qtn2;
+      imu_msg.orientation.z = epson_data.qtn3;
+      imu_msg.orientation.w = epson_data.qtn0;
       imu_pub.publish(imu_msg);
+
       // Publish temperature
       tempc_msg.header = imu_msg.header;
       tempc_msg.temperature = epson_data.temperature;
       tempc_pub.publish(tempc_msg);
 
-#ifdef PUB_RPY
-      // Convert the quaternion to euler YPR (rotating frame)
-      // which is equivalent to RPY (fixed frame)
-      // Then publish roll, pitch, yaw angles
-      double roll, pitch, yaw;
-
-      tf2::Matrix3x3(myQuaternion).getRPY(roll, pitch, yaw);
-      geometry_msgs::Vector3Stamped rpy;
-      rpy.header = imu_msg.header;
-      rpy.vector.x = roll;
-      rpy.vector.y = pitch;
-      rpy.vector.z = yaw;
-      rpy_pub.publish(rpy);
-#endif  // PUB_RPY
     } else {
       ROS_WARN(
-          "Warning: Checksum error or incorrect delimiter bytes in imu_msg "
-          "detected");
+        "Warning: Checksum error or incorrect delimiter bytes in imu_msg "
+        "detected");
     }
   }
   sensorStop();
