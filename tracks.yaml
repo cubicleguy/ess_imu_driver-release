@@ -24,4 +24,4 @@ tracks:
     ros_distro: noetic
     vcs_type: git
     vcs_uri: https://github.com/cubicleguy/ess_imu_driver.git
-    version: {auto}
+    version: :{auto}
